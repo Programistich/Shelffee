@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shelffee — дизайн-система</title>
+  <link rel="stylesheet" href="/static/theme.css">
+  <style>
+    section { margin-bottom: 40px; }
+    .swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .swatch { height: 56px; border-radius: 10px; border: 1px solid var(--sf-line); display: flex; align-items: flex-end; padding: 4px; font-size: 10px; font-family: monospace; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+<main class="sf-page">
+  <h1>Shelffee</h1>
+  <p class="sf-hint">Дизайн-система: льняна стіна, тикові дошки, шкіряні ремені.</p>
+  <div class="toolbar">
+    <button class="sf-btn sf-btn--ghost" onclick="document.documentElement.toggleAttribute('data-theme') || document.documentElement.setAttribute('data-theme','evening')">☀︎ / ☾</button>
+  </div>
+
+  <section>
+    <h2>Палітра</h2>
+    <div class="swatches">
+      <div class="swatch" style="background:var(--sf-wall)">wall</div>
+      <div class="swatch" style="background:var(--sf-wall-deep)">wall-deep</div>
+      <div class="swatch" style="background:var(--sf-paper)">paper</div>
+      <div class="swatch" style="background:var(--sf-paper-deep)">paper-deep</div>
+      <div class="swatch" style="background:var(--sf-wood-lip)">wood-lip</div>
+      <div class="swatch" style="background:var(--sf-wood-face)">wood-face</div>
+      <div class="swatch" style="background:var(--sf-wood-body)">wood-body</div>
+      <div class="swatch" style="background:var(--sf-wood-edge)">wood-edge</div>
+      <div class="swatch" style="background:var(--sf-strap-light)">strap-light</div>
+      <div class="swatch" style="background:var(--sf-strap)">strap</div>
+      <div class="swatch" style="background:var(--sf-strap-dark)">strap-dark</div>
+      <div class="swatch" style="background:var(--sf-brass)">brass</div>
+      <div class="swatch" style="background:var(--sf-accent-filter);color:#fff">filter</div>
+      <div class="swatch" style="background:var(--sf-accent-espresso);color:#fff">espresso</div>
+      <div class="swatch" style="background:var(--sf-accent-omni);color:#fff">omni</div>
+      <div class="swatch" style="background:var(--sf-ink);color:#fff">ink</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Стелаж</h2>
+    <p class="sf-hint">Пакети розкладаються по дошках залежно від ширини. Ширина: <output id="rack-w"></output></p>
+    <input id="rack-range" type="range" min="280" max="640" value="640" style="width:100%;margin-bottom:12px">
+    <div id="rack-wrap">
+      <div id="rack" class="sf-rack"></div>
+    </div>
+    <div id="rack-empty" class="sf-rack"></div>
+  </section>
+
+  <section>
+    <h2>Кнопки</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="sf-btn">Додати каву</button>
+      <button class="sf-btn sf-btn--ghost">Поділитися</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Форма</h2>
+    <div class="sf-card" style="display:grid;gap:8px">
+      <input class="sf-field" placeholder="Назва">
+      <input class="sf-field" placeholder="Країна">
+      <select class="sf-field"><option>Фільтр</option><option>Еспресо</option><option>Omni</option></select>
+      <button class="sf-btn">Зберегти</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Картка кави</h2>
+    <div class="sf-card">
+      <h2>Ethiopia Guji</h2>
+      <p class="sf-hint" style="margin:0 0 12px">Ефіопія · Guji · 1 950 MASL · washed</p>
+      <p style="margin:0 0 12px">
+        <span class="sf-tag">чорниця</span> <span class="sf-tag">бергамот</span> <span class="sf-tag">жасмин</span>
+      </p>
+      <div class="sf-meter"><span>Кислотність</span><div class="sf-meter__track"><div class="sf-meter__fill" style="width:80%"></div></div></div>
+      <div class="sf-meter"><span>Солодкість</span><div class="sf-meter__track"><div class="sf-meter__fill" style="width:70%"></div></div></div>
+      <div class="sf-meter"><span>Гіркота</span><div class="sf-meter__track"><div class="sf-meter__fill" style="width:20%"></div></div></div>
+      <div class="sf-meter"><span>Тіло</span><div class="sf-meter__track"><div class="sf-meter__fill" style="width:50%"></div></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Помилка</h2>
+    <div class="sf-error">Не вдалося зберегти каву</div>
+  </section>
+</main>
+<script src="/static/rack.js"></script>
+<script>
+  const coffees = [
+    { name: "Ethiopia Guji", meta: "250 г · washed", roast: "filter" },
+    { name: "Brazil Cerrado", meta: "1 кг · natural", roast: "espresso" },
+    { name: "Colombia Huila", meta: "250 г · honey", roast: "omni" },
+    { name: "Kenya Nyeri AA", meta: "200 г · washed", roast: "filter" },
+    { name: "House Blend", meta: "1 кг", roast: "espresso" },
+    { name: "Panama Geisha", meta: "100 г · natural", roast: "filter" },
+    { name: "Guatemala Antigua", meta: "250 г · washed", roast: "omni" },
+  ];
+  SfRack.mount(document.getElementById("rack"), coffees, { label: "Домашня", onSelect: (c) => alert(c.name) });
+  SfRack.mount(document.getElementById("rack-empty"), [], { label: "Хочу спробувати", emptyText: "Тут ще порожньо" });
+  const range = document.getElementById("rack-range");
+  const wrap = document.getElementById("rack-wrap");
+  const out = document.getElementById("rack-w");
+  const sync = () => { wrap.style.maxWidth = range.value + "px"; out.value = range.value + "px"; };
+  range.oninput = sync;
+  sync();
+</script>
+</body>
+</html>
