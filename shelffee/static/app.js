@@ -23,6 +23,23 @@ const METHODS = {
   cold_brew: "Колд брю",
   batch_brew: "Батч брю",
 };
+const METHOD_ICONS = {
+  espresso: "☕",
+  v60: "▽",
+  filter: "▽",
+  kalita: "▽",
+  chemex: "⧖",
+  origami: "▽",
+  hario_switch: "▽",
+  clever: "▽",
+  aeropress: "⏚",
+  french_press: "⏍",
+  moka: "⬢",
+  cezve: "⌂",
+  siphon: "⧗",
+  cold_brew: "❄",
+  batch_brew: "⏣",
+};
 let racks = [];
 
 function setRack(next) {
@@ -232,6 +249,8 @@ function showCoffeeForm(shelfId, coffee = null) {
         </div>
       </div>
       <input class="sf-field" name="name" placeholder="Назва" value="${v("name")}" required>
+      <input class="sf-field" name="roaster" list="roasters" placeholder="Обсмажчик" value="${v("roaster")}" autocomplete="off">
+      <datalist id="roasters"></datalist>
       <input class="sf-field" name="country" placeholder="Країна" value="${v("country")}" required>
       <input class="sf-field" name="flavor_notes" placeholder="Дескриптори смаку, через кому" value="${esc((coffee?.flavor_notes || []).join(", "))}" required>
       <select class="sf-field" name="roast" required>
@@ -270,6 +289,9 @@ function showCoffeeForm(shelfId, coffee = null) {
   const preview = app.querySelector("#preview");
   let photoData = null;
   if (coffee?.has_photo) loadPhoto(preview, coffee.id);
+  api("/roasters").then((names) => {
+    app.querySelector("#roasters").innerHTML = names.map((n) => `<option value="${esc(n)}">`).join("");
+  }).catch(() => {});
   scan.onclick = () => photo.click();
   photo.onchange = async () => {
     const file = photo.files[0];
@@ -285,7 +307,8 @@ function showCoffeeForm(shelfId, coffee = null) {
     try {
       const r = await api("/coffees/recognize", { method: "POST", body });
       const set = (k, val) => { if (val != null && val !== "") form.elements[k].value = val; };
-      set("name", r.roaster && r.name ? `${r.roaster} ${r.name}` : r.name || r.roaster);
+      set("name", r.name || r.roaster);
+      set("roaster", r.roaster);
       set("country", r.country);
       set("flavor_notes", r.flavor_notes.join(", "));
       set("roast", r.roast);
@@ -318,6 +341,7 @@ function showCoffeeForm(shelfId, coffee = null) {
     const num = (k) => (f.get(k) === "" ? null : Number(f.get(k)));
     const body = {
       name: str("name"),
+      roaster: str("roaster"),
       country: str("country"),
       flavor_notes: f.get("flavor_notes").split(",").map((s) => s.trim()).filter(Boolean),
       roast: f.get("roast"),
@@ -366,6 +390,7 @@ async function showCoffee(coffeeId) {
       <div class="sf-coffee__head">
         <img id="photo" class="sf-photo" alt="" hidden>
         <div>
+          ${c.roaster ? `<p class="sf-hint sf-coffee__roaster">${esc(c.roaster)}</p>` : ""}
           <h1 class="sf-coffee__name">${esc(c.name)}</h1>
           <p class="sf-hint sf-coffee__origin">${esc([c.country, c.region].filter(Boolean).join(" · "))}</p>
           <p class="sf-coffee__chips">
@@ -382,26 +407,22 @@ async function showCoffee(coffeeId) {
       <button id="edit" class="sf-btn sf-btn--ghost">Редагувати</button>
       <button id="delete" class="sf-btn sf-btn--ghost sf-btn--danger-ghost">Видалити</button>
     </div>
-    <h2>Рецепти</h2>
-    ${c.recipes.length ? `<ul class="sf-list sf-card">${c.recipes.map((r) => `
-      <li>
-        <div>
-          <strong>${METHODS[r.method] || esc(r.method)}</strong> · ${r.dose_grams} г${r.grind ? ` · ${esc(r.grind)}` : ""}
-          ${r.notes ? `<div class="sf-hint">${esc(r.notes)}</div>` : ""}
-        </div>
-      </li>`).join("")}</ul>` : '<p class="sf-hint">Рецептів ще немає.</p>'}
-    <button id="add-recipe" class="sf-btn sf-btn--ghost">Додати рецепт</button>
-    <form id="recipe" class="sf-form sf-card" hidden>
-      <select class="sf-field" name="method" required>
-        ${Object.entries(METHODS).map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}
-      </select>
-      <div class="sf-grid2">
-        <input class="sf-field" name="dose_grams" type="number" min="0.1" step="0.1" placeholder="Доза, г" required>
-        <input class="sf-field" name="grind" placeholder="Помел">
-      </div>
-      <textarea class="sf-field" name="notes" rows="3" placeholder="Нотатки"></textarea>
-      <button class="sf-btn" type="submit">Зберегти рецепт</button>
-    </form>
+    <div class="sf-section-head">
+      <h2>Рецепти</h2>
+      <button id="add-recipe" class="sf-btn sf-btn--ghost sf-btn--sm" type="button">+ Рецепт</button>
+    </div>
+    ${c.recipes.length ? `<ul class="sf-recipes">${c.recipes.map((r) => `
+      <li class="sf-recipe" data-id="${r.id}">
+        <button type="button" class="sf-recipe__open">
+          <span class="sf-recipe__icon">${METHOD_ICONS[r.method] || "☕"}</span>
+          <span class="sf-recipe__body">
+            <span class="sf-recipe__title">${METHODS[r.method] || esc(r.method)}</span>
+            <span class="sf-recipe__meta"><b>${r.dose_grams} г</b>${r.grind ? ` · помел ${esc(r.grind)}` : ""} · ${formatDate(r.created_at)}</span>
+            ${r.notes ? `<span class="sf-recipe__notes">${esc(r.notes)}</span>` : ""}
+          </span>
+          <span class="sf-recipe__chevron">›</span>
+        </button>
+      </li>`).join("")}</ul>` : '<p class="sf-hint">Рецептів ще немає — запишіть, як ви заварили цю каву.</p>'}
   `;
   if (c.has_photo) loadPhoto(app.querySelector("#photo"), c.id);
   app.querySelector("#edit").onclick = () => showCoffeeForm(c.shelf_id, c);
@@ -412,14 +433,73 @@ async function showCoffee(coffeeId) {
       showShelves();
     } catch (err) { showError(err); }
   };
-  const recipeForm = app.querySelector("#recipe");
-  const addRecipe = app.querySelector("#add-recipe");
-  addRecipe.onclick = () => {
-    recipeForm.hidden = false;
-    addRecipe.hidden = true;
-    recipeForm.elements.dose_grams.focus();
+  app.querySelector("#add-recipe").onclick = () => showRecipeForm(c);
+  app.querySelectorAll(".sf-recipe").forEach((li) => {
+    const r = c.recipes.find((x) => x.id === Number(li.dataset.id));
+    li.querySelector(".sf-recipe__open").onclick = () => showRecipe(c, r);
+  });
+}
+
+function formatDate(iso) {
+  return new Date(iso).toLocaleDateString("uk-UA", { day: "numeric", month: "long", year: "numeric" });
+}
+
+function showRecipe(coffee, r) {
+  setBack(() => showCoffee(coffee.id));
+  setRack(null);
+  app.innerHTML = `
+    <div class="sf-card sf-recipe-page">
+      <p class="sf-hint sf-recipe-page__coffee">${esc(coffee.name)}</p>
+      <div class="sf-recipe-page__head">
+        <span class="sf-recipe__icon sf-recipe__icon--lg">${METHOD_ICONS[r.method] || "☕"}</span>
+        <div>
+          <h1 class="sf-coffee__name">${METHODS[r.method] || esc(r.method)}</h1>
+          <p class="sf-hint">${formatDate(r.created_at)}</p>
+        </div>
+      </div>
+      <div class="sf-facts">
+        <div><span class="sf-facts__k">Доза</span><span class="sf-facts__v">${r.dose_grams} г</span></div>
+        <div><span class="sf-facts__k">Помел</span><span class="sf-facts__v">${r.grind ? esc(r.grind) : "—"}</span></div>
+      </div>
+      ${r.notes ? `<div class="sf-recipe-page__notes"><span class="sf-facts__k">Нотатки</span><p>${esc(r.notes)}</p></div>` : ""}
+    </div>
+    <div class="sf-row">
+      <button id="edit" class="sf-btn sf-btn--ghost">Редагувати</button>
+      <button id="delete" class="sf-btn sf-btn--ghost sf-btn--danger-ghost">Видалити</button>
+    </div>
+  `;
+  app.querySelector("#edit").onclick = () => showRecipeForm(coffee, r);
+  app.querySelector("#delete").onclick = async () => {
+    if (!(await confirmAction(`Видалити рецепт «${METHODS[r.method] || r.method}»?`))) return;
+    try {
+      await api(`/recipes/${r.id}`, { method: "DELETE" });
+      showCoffee(coffee.id);
+    } catch (err) { showError(err); }
   };
-  recipeForm.onsubmit = async (e) => {
+}
+
+function showRecipeForm(coffee, recipe = null) {
+  setBack(() => (recipe ? showRecipe(coffee, recipe) : showCoffee(coffee.id)));
+  setRack(null);
+  const v = (k) => esc(recipe?.[k] ?? "");
+  app.innerHTML = `
+    <h1>${recipe ? "Редагувати рецепт" : "Новий рецепт"}</h1>
+    <p class="sf-hint sf-recipe-page__coffee">${esc(coffee.name)}</p>
+    <form id="recipe" class="sf-form sf-card">
+      <select class="sf-field" name="method" required>
+        ${Object.entries(METHODS).map(([val, l]) => `<option value="${val}"${recipe?.method === val ? " selected" : ""}>${l}</option>`).join("")}
+      </select>
+      <div class="sf-grid2">
+        <input class="sf-field" name="dose_grams" type="number" min="0.1" step="0.1" placeholder="Доза, г" value="${v("dose_grams")}" required>
+        <input class="sf-field" name="grind" placeholder="Помел" value="${v("grind")}">
+      </div>
+      <textarea class="sf-field" name="notes" rows="4" placeholder="Нотатки: температура, час, співвідношення, що вийшло…">${v("notes")}</textarea>
+      <button class="sf-btn" type="submit">${recipe ? "Зберегти" : "Додати рецепт"}</button>
+    </form>
+  `;
+  const form = app.querySelector("#recipe");
+  if (!recipe) form.elements.dose_grams.focus();
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     const body = {
@@ -429,8 +509,10 @@ async function showCoffee(coffeeId) {
       notes: f.get("notes").trim() || null,
     };
     try {
-      await api(`/coffees/${coffeeId}/recipes`, { method: "POST", body: JSON.stringify(body) });
-      showCoffee(coffeeId);
+      const saved = recipe
+        ? await api(`/recipes/${recipe.id}`, { method: "PUT", body: JSON.stringify(body) })
+        : await api(`/coffees/${coffee.id}/recipes`, { method: "POST", body: JSON.stringify(body) });
+      showRecipe(coffee, saved);
     } catch (err) { showError(err); }
   };
 }

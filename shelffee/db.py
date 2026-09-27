@@ -91,6 +91,7 @@ class Coffee(Base):
         ForeignKey("shelves.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(256))
+    roaster: Mapped[str | None] = mapped_column(String(128))
     country: Mapped[str] = mapped_column(String(64))
     flavor_notes: Mapped[list[str]] = mapped_column(ARRAY(String(64)))
     roast: Mapped[str] = mapped_column(String(16))
@@ -244,6 +245,17 @@ async def list_coffees(shelf_id: int) -> list[Coffee]:
         return list(result)
 
 
+async def list_roasters() -> list[str]:
+    async with SessionFactory() as session:
+        result = await session.scalars(
+            select(Coffee.roaster)
+            .where(Coffee.roaster.isnot(None))
+            .group_by(Coffee.roaster)
+            .order_by(func.count().desc(), Coffee.roaster)
+        )
+        return list(result)
+
+
 async def create_coffee(shelf_id: int, **fields) -> Coffee:
     async with SessionFactory() as session:
         coffee = Coffee(shelf_id=shelf_id, **fields)
@@ -295,3 +307,30 @@ async def create_recipe(coffee_id: int, **fields) -> Recipe:
         await session.commit()
         await session.refresh(recipe)
         return recipe
+
+
+async def get_recipe_for_user(recipe_id: int, user_id: int) -> Recipe | None:
+    async with SessionFactory() as session:
+        return await session.scalar(
+            select(Recipe)
+            .join(Coffee)
+            .join(Shelf)
+            .join(ShelfMember)
+            .where(Recipe.id == recipe_id, ShelfMember.user_id == user_id)
+        )
+
+
+async def update_recipe(recipe_id: int, **fields) -> Recipe:
+    async with SessionFactory() as session:
+        recipe = await session.get(Recipe, recipe_id)
+        for key, value in fields.items():
+            setattr(recipe, key, value)
+        await session.commit()
+        await session.refresh(recipe)
+        return recipe
+
+
+async def delete_recipe(recipe_id: int) -> None:
+    async with SessionFactory() as session:
+        await session.delete(await session.get(Recipe, recipe_id))
+        await session.commit()

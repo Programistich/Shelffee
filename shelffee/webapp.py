@@ -20,15 +20,19 @@ from shelffee.db import (
     create_recipe,
     create_shelf,
     delete_coffee,
+    delete_recipe,
     delete_shelf,
     get_coffee_for_user,
+    get_recipe_for_user,
     get_shelf_for_user,
     get_shelf_role,
     get_user,
     list_coffees,
     list_recipes,
+    list_roasters,
     list_shelves_with_coffees,
     update_coffee,
+    update_recipe,
     update_shelf,
     upsert_user,
 )
@@ -52,6 +56,7 @@ class ShelfIn(BaseModel):
 
 class CoffeeIn(BaseModel):
     name: str = Field(min_length=1, max_length=256)
+    roaster: str | None = Field(default=None, max_length=128)
     country: str = Field(min_length=1, max_length=64)
     flavor_notes: list[str] = Field(min_length=1)
     roast: Literal["filter", "espresso", "omni"]
@@ -120,6 +125,7 @@ def coffee_json(coffee: Coffee) -> dict:
         "id": coffee.id,
         "shelf_id": coffee.shelf_id,
         "name": coffee.name,
+        "roaster": coffee.roaster,
         "country": coffee.country,
         "flavor_notes": coffee.flavor_notes,
         "roast": coffee.roast,
@@ -301,6 +307,10 @@ async def coffees_list(request: web.Request) -> web.Response:
     )
 
 
+async def roasters_list(request: web.Request) -> web.Response:
+    return web.json_response(await list_roasters())
+
+
 async def coffees_create(request: web.Request) -> web.Response:
     shelf = await require_shelf(request)
     data = await parse_body(request, CoffeeIn)
@@ -370,6 +380,26 @@ async def recipes_create(request: web.Request) -> web.Response:
     return web.json_response(recipe_json(recipe), status=201)
 
 
+async def require_recipe(request: web.Request) -> Recipe:
+    recipe = await get_recipe_for_user(int(request.match_info["recipe_id"]), request["user"].id)
+    if recipe is None:
+        raise web.HTTPNotFound(text="Recipe not found")
+    return recipe
+
+
+async def recipe_update(request: web.Request) -> web.Response:
+    recipe = await require_recipe(request)
+    data = await parse_body(request, RecipeIn)
+    recipe = await update_recipe(recipe.id, **data.model_dump())
+    return web.json_response(recipe_json(recipe))
+
+
+async def recipe_delete(request: web.Request) -> web.Response:
+    recipe = await require_recipe(request)
+    await delete_recipe(recipe.id)
+    return web.Response(status=204)
+
+
 def setup_routes(app: web.Application) -> None:
     app.middlewares.append(auth_middleware)
     app.router.add_get("/", index)
@@ -384,9 +414,12 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/api/shelves/{shelf_id:\\d+}/coffees", coffees_list)
     app.router.add_post("/api/shelves/{shelf_id:\\d+}/coffees", coffees_create)
     app.router.add_post("/api/coffees/recognize", coffees_recognize)
+    app.router.add_get("/api/roasters", roasters_list)
     app.router.add_get("/api/coffees/{coffee_id:\\d+}", coffee_get)
     app.router.add_get("/api/coffees/{coffee_id:\\d+}/photo", coffee_photo)
     app.router.add_put("/api/coffees/{coffee_id:\\d+}", coffee_update)
     app.router.add_delete("/api/coffees/{coffee_id:\\d+}", coffee_delete)
     app.router.add_post("/api/coffees/{coffee_id:\\d+}/recipes", recipes_create)
+    app.router.add_put("/api/recipes/{recipe_id:\\d+}", recipe_update)
+    app.router.add_delete("/api/recipes/{recipe_id:\\d+}", recipe_delete)
     app.router.add_static("/static", STATIC_DIR)
