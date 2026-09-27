@@ -1,9 +1,15 @@
+import base64
+import binascii
+import hashlib
+import hmac
+import logging
+import time
 from pathlib import Path
 from typing import Literal
 
 from aiogram.utils.web_app import safe_parse_webapp_init_data
 from aiohttp import web
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from shelffee.config import settings
 from shelffee.db import (
@@ -18,15 +24,26 @@ from shelffee.db import (
     get_coffee_for_user,
     get_shelf_for_user,
     get_shelf_role,
+    get_user,
     list_coffees,
     list_recipes,
-    list_shelves,
+    list_shelves_with_coffees,
     update_coffee,
     update_shelf,
     upsert_user,
 )
+from shelffee.vision import extract_coffee, prepare_photo
+
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_PHOTO_BYTES = 2 * 1024 * 1024
+LOGIN_MAX_AGE = 24 * 60 * 60
+SESSION_MAX_AGE = 30 * 24 * 60 * 60
+SESSION_COOKIE = "session"
+SESSION_KEY = hashlib.sha256(f"shelffee-session:{settings.bot_token}".encode()).digest()
+WIDGET_KEY = hashlib.sha256(settings.bot_token.encode()).digest()
 
 STATIC_DIR = Path(__file__).parent / "static"
+STATIC_VERSION = str(int(max(p.stat().st_mtime for p in STATIC_DIR.iterdir())))
 
 
 class ShelfIn(BaseModel):
@@ -49,6 +66,26 @@ class CoffeeIn(BaseModel):
     sweetness: int | None = Field(default=None, ge=0)
     bitterness: int | None = Field(default=None, ge=0)
     body: int | None = Field(default=None, ge=0)
+    photo: bytes | None = None
+
+    @field_validator("photo", mode="before")
+    @classmethod
+    def decode_photo(cls, v):
+        if v is None or isinstance(v, bytes):
+            return v
+        try:
+            raw = base64.b64decode(v, validate=True)
+        except (binascii.Error, TypeError):
+            raise ValueError("photo must be base64")
+        if len(raw) > MAX_PHOTO_BYTES:
+            raise ValueError("photo is too large")
+        return raw
+
+    def coffee_fields(self, *, partial_photo: bool = False) -> dict:
+        fields = self.model_dump()
+        if partial_photo and "photo" not in self.model_fields_set:
+            fields.pop("photo")
+        return fields
 
 
 class RecipeIn(BaseModel):
@@ -97,6 +134,7 @@ def coffee_json(coffee: Coffee) -> dict:
         "sweetness": coffee.sweetness,
         "bitterness": coffee.bitterness,
         "body": coffee.body,
+        "has_photo": coffee.has_photo,
         "created_at": coffee.created_at.isoformat(),
     }
 
@@ -113,19 +151,55 @@ def recipe_json(recipe: Recipe) -> dict:
     }
 
 
+def verify_login_widget(query: dict[str, str]) -> dict[str, str]:
+    data = {k: v for k, v in query.items() if k != "hash"}
+    check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data))
+    expected = hmac.new(WIDGET_KEY, check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, query.get("hash", "")):
+        raise web.HTTPUnauthorized(text="Invalid login data")
+    if time.time() - int(data.get("auth_date", 0)) > LOGIN_MAX_AGE:
+        raise web.HTTPUnauthorized(text="Login data is outdated")
+    return data
+
+
+def make_session(user_id: int) -> str:
+    payload = f"{user_id}.{int(time.time())}"
+    sig = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def parse_session(token: str | None) -> int | None:
+    if not token:
+        return None
+    try:
+        user_id, issued, sig = token.split(".")
+        payload = f"{user_id}.{issued}"
+        expected = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig) or time.time() - int(issued) > SESSION_MAX_AGE:
+            return None
+        return int(user_id)
+    except ValueError:
+        return None
+
+
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
     if not request.path.startswith("/api/"):
         return await handler(request)
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("tma "):
-        raise web.HTTPUnauthorized(text="Missing initData")
-    try:
-        init_data = safe_parse_webapp_init_data(settings.bot_token, auth[4:])
-    except ValueError:
-        raise web.HTTPUnauthorized(text="Invalid initData")
-    tg_user = init_data.user
-    request["user"] = await upsert_user(tg_user.id, tg_user.username, tg_user.first_name)
+    if auth.startswith("tma "):
+        try:
+            init_data = safe_parse_webapp_init_data(settings.bot_token, auth[4:])
+        except ValueError:
+            raise web.HTTPUnauthorized(text="Invalid initData")
+        tg_user = init_data.user
+        request["user"] = await upsert_user(tg_user.id, tg_user.username, tg_user.first_name)
+        return await handler(request)
+    user_id = parse_session(request.cookies.get(SESSION_COOKIE))
+    user = await get_user(user_id) if user_id else None
+    if user is None:
+        raise web.HTTPUnauthorized(text="Not authenticated")
+    request["user"] = user
     return await handler(request)
 
 
@@ -136,8 +210,35 @@ async def parse_body(request: web.Request, model: type[BaseModel]) -> BaseModel:
         raise web.HTTPBadRequest(text=str(e))
 
 
-async def index(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(STATIC_DIR / "index.html")
+async def index(request: web.Request) -> web.Response:
+    html = (
+        (STATIC_DIR / "index.html")
+        .read_text()
+        .replace("{{v}}", STATIC_VERSION)
+        .replace("{{bot}}", request.app["bot_username"])
+    )
+    return web.Response(text=html, content_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+async def auth_telegram(request: web.Request) -> web.Response:
+    data = verify_login_widget(dict(request.query))
+    user = await upsert_user(int(data["id"]), data.get("username"), data.get("first_name", ""))
+    response = web.HTTPFound("/")
+    response.set_cookie(
+        SESSION_COOKIE,
+        make_session(user.id),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        secure=settings.webapp_url.startswith("https://"),
+        samesite="Lax",
+    )
+    return response
+
+
+async def auth_logout(request: web.Request) -> web.Response:
+    response = web.Response(status=204)
+    response.del_cookie(SESSION_COOKIE)
+    return response
 
 
 async def me(request: web.Request) -> web.Response:
@@ -148,8 +249,13 @@ async def me(request: web.Request) -> web.Response:
 
 
 async def shelves_list(request: web.Request) -> web.Response:
-    shelves = await list_shelves(request["user"].id)
-    return web.json_response([shelf_json(s) for s in shelves])
+    shelves = await list_shelves_with_coffees(request["user"].id)
+    return web.json_response(
+        [
+            {**shelf_json(shelf), "role": role, "coffees": [coffee_json(c) for c in shelf.coffees]}
+            for shelf, role in shelves
+        ]
+    )
 
 
 async def shelves_create(request: web.Request) -> web.Response:
@@ -198,8 +304,30 @@ async def coffees_list(request: web.Request) -> web.Response:
 async def coffees_create(request: web.Request) -> web.Response:
     shelf = await require_shelf(request)
     data = await parse_body(request, CoffeeIn)
-    coffee = await create_coffee(shelf.id, **data.model_dump())
+    coffee = await create_coffee(shelf.id, **data.coffee_fields())
     return web.json_response(coffee_json(coffee), status=201)
+
+
+async def coffees_recognize(request: web.Request) -> web.Response:
+    reader = await request.multipart()
+    field = await reader.next()
+    if field is None or field.name != "image":
+        raise web.HTTPBadRequest(text="Expected multipart field 'image'")
+    content_type = field.headers.get("Content-Type", "")
+    if not content_type.startswith("image/"):
+        raise web.HTTPBadRequest(text="File must be an image")
+    image = await field.read(decode=False)
+    if len(image) > MAX_IMAGE_BYTES:
+        raise web.HTTPRequestEntityTooLarge(max_size=MAX_IMAGE_BYTES, actual_size=len(image))
+    try:
+        extracted = await extract_coffee(image, content_type)
+        photo = prepare_photo(image)
+    except Exception as e:
+        logging.exception("Coffee recognition failed")
+        raise web.HTTPBadGateway(text=f"Не вдалося розпізнати фото: {e}")
+    return web.json_response(
+        {**extracted.model_dump(), "photo": base64.b64encode(photo).decode()}
+    )
 
 
 async def require_coffee(request: web.Request) -> Coffee:
@@ -215,10 +343,17 @@ async def coffee_get(request: web.Request) -> web.Response:
     return web.json_response({**coffee_json(coffee), "recipes": [recipe_json(r) for r in recipes]})
 
 
+async def coffee_photo(request: web.Request) -> web.Response:
+    coffee = await require_coffee(request)
+    if coffee.photo is None:
+        raise web.HTTPNotFound(text="No photo")
+    return web.Response(body=coffee.photo, content_type="image/jpeg")
+
+
 async def coffee_update(request: web.Request) -> web.Response:
     coffee = await require_coffee(request)
     data = await parse_body(request, CoffeeIn)
-    coffee = await update_coffee(coffee.id, **data.model_dump())
+    coffee = await update_coffee(coffee.id, **data.coffee_fields(partial_photo=True))
     return web.json_response(coffee_json(coffee))
 
 
@@ -238,6 +373,8 @@ async def recipes_create(request: web.Request) -> web.Response:
 def setup_routes(app: web.Application) -> None:
     app.middlewares.append(auth_middleware)
     app.router.add_get("/", index)
+    app.router.add_get("/auth/telegram", auth_telegram)
+    app.router.add_post("/auth/logout", auth_logout)
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/shelves", shelves_list)
     app.router.add_post("/api/shelves", shelves_create)
@@ -246,7 +383,9 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/api/shelves/{shelf_id:\\d+}/share", shelf_share)
     app.router.add_get("/api/shelves/{shelf_id:\\d+}/coffees", coffees_list)
     app.router.add_post("/api/shelves/{shelf_id:\\d+}/coffees", coffees_create)
+    app.router.add_post("/api/coffees/recognize", coffees_recognize)
     app.router.add_get("/api/coffees/{coffee_id:\\d+}", coffee_get)
+    app.router.add_get("/api/coffees/{coffee_id:\\d+}/photo", coffee_photo)
     app.router.add_put("/api/coffees/{coffee_id:\\d+}", coffee_update)
     app.router.add_delete("/api/coffees/{coffee_id:\\d+}", coffee_delete)
     app.router.add_post("/api/coffees/{coffee_id:\\d+}/recipes", recipes_create)

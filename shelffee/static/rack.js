@@ -15,8 +15,6 @@
   function shelfHTML(row, offset, label, emptyText) {
     const bags = row.map((item, i) => bagHTML(item, offset + i)).join("");
     return `<div class="sf-shelf${row.length ? "" : " sf-shelf--empty"}">
-      <span class="sf-shelf__strap sf-shelf__strap--l"></span>
-      <span class="sf-shelf__strap sf-shelf__strap--r"></span>
       <div class="sf-shelf__items">${row.length ? bags : esc(emptyText)}</div>
       <div class="sf-shelf__board"></div>
       ${label ? `<span class="sf-shelf__label">${esc(label)}</span>` : ""}

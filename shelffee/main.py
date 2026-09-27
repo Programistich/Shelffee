@@ -12,7 +12,7 @@ from shelffee.webapp import setup_routes
 
 
 async def run_web(bot_username: str) -> None:
-    app = web.Application()
+    app = web.Application(client_max_size=4 * 1024 * 1024)
     app["bot_username"] = bot_username
     setup_routes(app)
     runner = web.AppRunner(app)

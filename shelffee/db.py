@@ -1,9 +1,28 @@
 import secrets
 from datetime import datetime
 
-from sqlalchemy import ARRAY, BigInteger, DateTime, Float, ForeignKey, String, Text, func, select
+from sqlalchemy import (
+    ARRAY,
+    BigInteger,
+    DateTime,
+    Float,
+    ForeignKey,
+    LargeBinary,
+    String,
+    Text,
+    func,
+    select,
+)
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    column_property,
+    mapped_column,
+    relationship,
+    selectinload,
+    undefer,
+)
 
 from shelffee.config import settings
 
@@ -42,7 +61,7 @@ class Shelf(Base):
         back_populates="shelf", cascade="all, delete-orphan"
     )
     coffees: Mapped[list["Coffee"]] = relationship(
-        back_populates="shelf", cascade="all, delete-orphan"
+        back_populates="shelf", cascade="all, delete-orphan", order_by="Coffee.created_at.desc()"
     )
 
 
@@ -86,6 +105,8 @@ class Coffee(Base):
     sweetness: Mapped[int | None]
     bitterness: Mapped[int | None]
     body: Mapped[int | None]
+    photo: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    has_photo: Mapped[bool] = column_property(photo.isnot(None))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -133,6 +154,11 @@ async def upsert_user(user_id: int, username: str | None, first_name: str) -> Us
         return user
 
 
+async def get_user(user_id: int) -> User | None:
+    async with SessionFactory() as session:
+        return await session.get(User, user_id)
+
+
 async def join_shelf_by_token(share_token: str, user_id: int) -> Shelf | None:
     async with SessionFactory() as session:
         shelf = await session.scalar(
@@ -156,6 +182,18 @@ async def list_shelves(user_id: int) -> list[Shelf]:
             .order_by(Shelf.created_at)
         )
         return list(result)
+
+
+async def list_shelves_with_coffees(user_id: int) -> list[tuple[Shelf, str]]:
+    async with SessionFactory() as session:
+        result = await session.execute(
+            select(Shelf, ShelfMember.role)
+            .join(ShelfMember)
+            .where(ShelfMember.user_id == user_id)
+            .options(selectinload(Shelf.coffees))
+            .order_by(Shelf.created_at)
+        )
+        return [(shelf, role) for shelf, role in result.all()]
 
 
 async def create_shelf(name: str, user_id: int) -> Shelf:
@@ -222,6 +260,7 @@ async def get_coffee_for_user(coffee_id: int, user_id: int) -> Coffee | None:
             .join(Shelf)
             .join(ShelfMember)
             .where(Coffee.id == coffee_id, ShelfMember.user_id == user_id)
+            .options(undefer(Coffee.photo))
         )
 
 

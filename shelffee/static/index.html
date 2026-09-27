@@ -5,11 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Shelffee</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/theme.css?v={{v}}">
 </head>
-<body>
+<body data-bot="{{bot}}">
+  <button id="back" class="sf-back" type="button" hidden>‹ Назад</button>
   <main id="app" class="sf-page"></main>
-  <script src="/static/rack.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/rack.js?v={{v}}"></script>
+  <script src="/static/crop.js?v={{v}}"></script>
+  <script src="/static/app.js?v={{v}}"></script>
 </body>
 </html>
